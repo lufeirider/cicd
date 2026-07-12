@@ -1,10 +1,6 @@
 name: 编译当前仓库
 
 on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
     inputs:
       language:
@@ -33,32 +29,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-
-      - name: 设置 Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: 设置 Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: 设置 Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: 设置 Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: 设置 Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
 
       - name: 检测语言
         id: detect
@@ -66,15 +41,62 @@ jobs:
           chmod +x scripts/*.sh
           DETECTED=$(scripts/detect-language.sh .)
           echo "detected=$DETECTED" >> "$GITHUB_OUTPUT"
+          echo "检测到语言: $DETECTED"
+
+      - name: 确定构建语言
+        id: lang
+        run: |
+          INPUT="${{ github.event_name == 'workflow_dispatch' && inputs.language || 'auto' }}"
+          DETECTED="${{ steps.detect.outputs.detected }}"
+          if [[ "$INPUT" == "auto" ]]; then
+            RESOLVED="$DETECTED"
+          else
+            RESOLVED="$INPUT"
+          fi
+          echo "value=$RESOLVED" >> "$GITHUB_OUTPUT"
+          echo "最终使用语言: $RESOLVED"
+
+      - name: 设置 Go
+        if: steps.lang.outputs.value == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: 设置 Java
+        if: steps.lang.outputs.value == 'java-maven' || steps.lang.outputs.value == 'java-gradle'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 设置 Rust
+        if: steps.lang.outputs.value == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 设置 Node.js
+        if: steps.lang.outputs.value == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 设置 Python
+        if: steps.lang.outputs.value == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 设置 .NET
+        if: steps.lang.outputs.value == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
 
       - name: 执行构建
         env:
-          BUILD_CMD: ${{ inputs.build_command }}
+          BUILD_CMD: ${{ github.event_name == 'workflow_dispatch' && inputs.build_command || '' }}
         run: |
-          LANG="${{ inputs.language || 'auto' }}"
-          if [[ "$LANG" == "auto" ]]; then
-            LANG="${{ steps.detect.outputs.detected }}"
-          fi
+          LANG="${{ steps.lang.outputs.value }}"
+          echo "使用语言: $LANG"
           scripts/build.sh . "$LANG" ./dist
 
       - name: 上传构建产物
