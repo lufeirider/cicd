@@ -1,0 +1,161 @@
+name: 自定义编译任意项目
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: 'GitHub 仓库地址 (如 https://github.com/owner/repo 或 owner/repo)'
+        required: true
+        type: string
+      branch:
+        description: '分支名'
+        required: false
+        default: 'main'
+        type: string
+      language:
+        description: '语言类型 (auto 自动检测)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - go
+          - rust
+          - java-maven
+          - java-gradle
+          - node
+          - python
+          - make
+          - cmake
+          - docker
+          - dotnet
+      build_command:
+        description: '自定义构建命令 (可选，覆盖默认)'
+        required: false
+        default: ''
+        type: string
+      go_version:
+        description: 'Go 版本'
+        required: false
+        default: '1.22'
+        type: string
+      java_version:
+        description: 'Java 版本'
+        required: false
+        default: '17'
+        type: string
+      rust_toolchain:
+        description: 'Rust toolchain'
+        required: false
+        default: 'stable'
+        type: string
+      node_version:
+        description: 'Node.js 版本'
+        required: false
+        default: '20'
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 解析仓库地址
+        id: parse
+        run: |
+          URL="${{ inputs.repo_url }}"
+          URL="${URL%.git}"
+          if [[ "$URL" =~ github\.com[:/]([^/]+)/([^/]+) ]]; then
+            echo "owner=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            echo "repo=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          elif [[ "$URL" =~ ^([^/]+)/([^/]+)$ ]]; then
+            echo "owner=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            echo "repo=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "无法解析仓库地址: $URL"
+            exit 1
+          fi
+
+      - name: Checkout 构建脚本
+        uses: actions/checkout@v4
+
+      - name: Checkout 目标仓库
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.parse.outputs.owner }}/${{ steps.parse.outputs.repo }}
+          ref: ${{ inputs.branch }}
+          path: target-repo
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 设置 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go_version }}
+          cache-dependency-path: target-repo/go.sum
+
+      - name: 设置 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+          cache: maven
+
+      - name: 设置 Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust_toolchain }}
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: target-repo/package-lock.json
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 设置 .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 检测语言
+        id: detect
+        run: |
+          chmod +x scripts/*.sh
+          DETECTED=$(scripts/detect-language.sh target-repo)
+          echo "detected=$DETECTED" >> "$GITHUB_OUTPUT"
+          echo "检测到语言: $DETECTED"
+
+      - name: 执行构建
+        env:
+          BUILD_CMD: ${{ inputs.build_command }}
+        run: |
+          LANG="${{ inputs.language }}"
+          if [[ "$LANG" == "auto" ]]; then
+            LANG="${{ steps.detect.outputs.detected }}"
+          fi
+          echo "使用语言: $LANG"
+          scripts/build.sh target-repo "$LANG" target-repo/dist
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ steps.parse.outputs.repo }}-${{ github.run_number }}
+          path: target-repo/dist/
+          if-no-files-found: warn
+
+      - name: 构建摘要
+        run: |
+          echo "## 构建完成" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 项目 | 值 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-----|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 仓库 | ${{ steps.parse.outputs.owner }}/${{ steps.parse.outputs.repo }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 分支 | ${{ inputs.branch }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 语言 | ${{ steps.detect.outputs.detected }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 产物列表" >> "$GITHUB_STEP_SUMMARY"
+          ls -la target-repo/dist/ 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || echo "无产物" >> "$GITHUB_STEP_SUMMARY"

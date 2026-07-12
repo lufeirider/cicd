@@ -1,0 +1,85 @@
+name: 编译当前仓库
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      language:
+        description: '语言类型 (auto 自动检测)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - go
+          - rust
+          - java-maven
+          - java-gradle
+          - node
+          - python
+          - make
+          - cmake
+          - docker
+          - dotnet
+      build_command:
+        description: '自定义构建命令 (可选)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: 设置 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 设置 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 检测语言
+        id: detect
+        run: |
+          chmod +x scripts/*.sh
+          DETECTED=$(scripts/detect-language.sh .)
+          echo "detected=$DETECTED" >> "$GITHUB_OUTPUT"
+
+      - name: 执行构建
+        env:
+          BUILD_CMD: ${{ inputs.build_command }}
+        run: |
+          LANG="${{ inputs.language || 'auto' }}"
+          if [[ "$LANG" == "auto" ]]; then
+            LANG="${{ steps.detect.outputs.detected }}"
+          fi
+          scripts/build.sh . "$LANG" ./dist
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: dist/
+          if-no-files-found: warn
