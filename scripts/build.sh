@@ -23,8 +23,61 @@ echo "==> 输出目录: $OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 cd "$ROOT"
 
+# Go 跨平台目标: linux / macOS / windows
+GO_PLATFORMS=(
+  "linux:amd64"
+  "linux:arm64"
+  "darwin:amd64"
+  "darwin:arm64"
+  "windows:amd64"
+)
+
+go_ldflags() {
+  local goos="$1"
+  local ldflags="-s -w"
+  if [[ "$goos" != "darwin" ]]; then
+    ldflags="${ldflags} -extldflags -static"
+  fi
+  echo "$ldflags"
+}
+
+go_output_name() {
+  local app_name="$1"
+  local goos="$2"
+  local goarch="$3"
+  local suffix="${app_name}-${goos}-${goarch}"
+  if [[ "$goos" == "windows" ]]; then
+    suffix="${suffix}.exe"
+  fi
+  echo "$suffix"
+}
+
+build_go_pkg_cross() {
+  local pkg="$1"
+  local app_name="$2"
+  local pkg_dir="$OUTPUT_DIR"
+
+  if [[ "$app_name" == "multi" ]]; then
+    pkg_dir="$OUTPUT_DIR/bin"
+    mkdir -p "$pkg_dir"
+  fi
+
+  for platform in "${GO_PLATFORMS[@]}"; do
+    local goos="${platform%%:*}"
+    local goarch="${platform##*:}"
+    local output_name
+    output_name="$(go_output_name "$app_name" "$goos" "$goarch")"
+    local ldflags
+    ldflags="$(go_ldflags "$goos")"
+
+    echo "构建: $pkg -> $pkg_dir/$output_name ($goos/$goarch)"
+    GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+      go build -v -ldflags "$ldflags" -o "$pkg_dir/$output_name" "$pkg"
+  done
+}
+
 build_go() {
-  echo "==> 构建 Go 项目..."
+  echo "==> 构建 Go 项目 (跨平台: linux / macOS / windows)..."
   go mod download 2>/dev/null || true
   if [[ -n "${BUILD_CMD:-}" ]]; then
     eval "$BUILD_CMD"
@@ -35,17 +88,18 @@ build_go() {
   MAIN_COUNT=$(echo "$MAIN_PKGS" | grep -c . 2>/dev/null || echo 0)
 
   if [[ "$MAIN_COUNT" -eq 0 ]]; then
-    echo "未找到 main 包，执行 go build ./..."
+    echo "未找到 main 包，跳过跨平台编译"
     go build -v ./...
   elif [[ "$MAIN_COUNT" -eq 1 ]]; then
-    go build -v -o "$OUTPUT_DIR/app" $MAIN_PKGS
+    local app_name="app"
+    if [[ -f go.mod ]]; then
+      app_name="$(grep '^module ' go.mod | awk '{print $2}' | xargs basename 2>/dev/null || echo "app")"
+    fi
+    build_go_pkg_cross "$MAIN_PKGS" "$app_name"
   else
-    mkdir -p "$OUTPUT_DIR/bin"
     while IFS= read -r pkg; do
       [[ -z "$pkg" ]] && continue
-      name="$(basename "$pkg")"
-      echo "构建: $pkg -> $OUTPUT_DIR/bin/$name"
-      go build -v -o "$OUTPUT_DIR/bin/$name" "$pkg"
+      build_go_pkg_cross "$pkg" "$(basename "$pkg")"
     done <<< "$MAIN_PKGS"
   fi
 }
@@ -123,6 +177,13 @@ build_make() {
   echo "==> 使用 Makefile 构建..."
   if [[ -n "${BUILD_CMD:-}" ]]; then
     eval "$BUILD_CMD"
+    return
+  fi
+
+  # Go 项目优先跨平台编译（Makefile 在 CI 上只能编当前平台）
+  if [[ -f go.mod ]]; then
+    echo "检测到 go.mod，改用 Go 跨平台编译"
+    build_go
     return
   fi
 
