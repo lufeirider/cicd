@@ -110,8 +110,20 @@ jobs:
           echo "value=$RESOLVED" >> "$GITHUB_OUTPUT"
           echo "最终使用语言: $RESOLVED"
 
+      - name: 检查 Makefile 依赖
+        id: deps
+        run: |
+          echo "need_go=false" >> "$GITHUB_OUTPUT"
+          echo "need_rust=false" >> "$GITHUB_OUTPUT"
+          if [[ -f target-repo/go.mod ]]; then
+            echo "need_go=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -f target-repo/Cargo.toml ]]; then
+            echo "need_rust=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 设置 Go
-        if: steps.lang.outputs.value == 'go'
+        if: steps.lang.outputs.value == 'go' || (steps.lang.outputs.value == 'make' && steps.deps.outputs.need_go == 'true')
         uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go_version }}
@@ -124,7 +136,7 @@ jobs:
           java-version: ${{ inputs.java_version }}
 
       - name: 设置 Rust
-        if: steps.lang.outputs.value == 'rust'
+        if: steps.lang.outputs.value == 'rust' || (steps.lang.outputs.value == 'make' && steps.deps.outputs.need_rust == 'true')
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ inputs.rust_toolchain }}

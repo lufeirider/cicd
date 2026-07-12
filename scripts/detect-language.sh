@@ -5,7 +5,10 @@ set -euo pipefail
 ROOT="${1:-.}"
 
 detect() {
-  if [[ -f "$ROOT/go.mod" ]]; then
+  # Makefile 优先：很多 Go/Rust 项目用 Makefile 作为标准构建入口
+  if [[ -f "$ROOT/Makefile" ]] || [[ -f "$ROOT/makefile" ]] || [[ -f "$ROOT/GNUmakefile" ]]; then
+    echo "make"
+  elif [[ -f "$ROOT/go.mod" ]]; then
     echo "go"
   elif [[ -f "$ROOT/Cargo.toml" ]]; then
     echo "rust"
@@ -17,8 +20,6 @@ detect() {
     echo "node"
   elif [[ -f "$ROOT/requirements.txt" ]] || [[ -f "$ROOT/pyproject.toml" ]] || [[ -f "$ROOT/setup.py" ]]; then
     echo "python"
-  elif [[ -f "$ROOT/Makefile" ]]; then
-    echo "make"
   elif [[ -f "$ROOT/CMakeLists.txt" ]]; then
     echo "cmake"
   elif [[ -f "$ROOT/Dockerfile" ]]; then

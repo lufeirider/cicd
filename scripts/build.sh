@@ -8,6 +8,10 @@ OUTPUT_DIR="${3:-./dist}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+ROOT="$(cd "$ROOT" && pwd)"
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+
 if [[ "$LANG" == "auto" ]]; then
   LANG="$("$SCRIPT_DIR/detect-language.sh" "$ROOT")"
 fi
@@ -24,8 +28,25 @@ build_go() {
   go mod download 2>/dev/null || true
   if [[ -n "${BUILD_CMD:-}" ]]; then
     eval "$BUILD_CMD"
+    return
+  fi
+
+  MAIN_PKGS=$(go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./... 2>/dev/null | sed '/^$/d' || true)
+  MAIN_COUNT=$(echo "$MAIN_PKGS" | grep -c . 2>/dev/null || echo 0)
+
+  if [[ "$MAIN_COUNT" -eq 0 ]]; then
+    echo "未找到 main 包，执行 go build ./..."
+    go build -v ./...
+  elif [[ "$MAIN_COUNT" -eq 1 ]]; then
+    go build -v -o "$OUTPUT_DIR/app" $MAIN_PKGS
   else
-    go build -v -o "$OUTPUT_DIR/app" ./...
+    mkdir -p "$OUTPUT_DIR/bin"
+    while IFS= read -r pkg; do
+      [[ -z "$pkg" ]] && continue
+      name="$(basename "$pkg")"
+      echo "构建: $pkg -> $OUTPUT_DIR/bin/$name"
+      go build -v -o "$OUTPUT_DIR/bin/$name" "$pkg"
+    done <<< "$MAIN_PKGS"
   fi
 }
 
@@ -102,10 +123,34 @@ build_make() {
   echo "==> 使用 Makefile 构建..."
   if [[ -n "${BUILD_CMD:-}" ]]; then
     eval "$BUILD_CMD"
-  else
-    make
-    cp -r bin "$OUTPUT_DIR/" 2>/dev/null || true
+    return
   fi
+
+  MAKEFILE="Makefile"
+  [[ -f Makefile ]] || MAKEFILE=$(ls makefile GNUmakefile 2>/dev/null | head -1)
+
+  if grep -qE '^build:' "$MAKEFILE" 2>/dev/null; then
+    echo "执行: make build"
+    make build
+  elif grep -qE '^all:' "$MAKEFILE" 2>/dev/null; then
+    echo "执行: make all"
+    make all
+  else
+    echo "执行: make"
+    make
+  fi
+
+  for dir in bin dist build out; do
+    if [[ -d "$dir" ]]; then
+      cp -r "$dir"/* "$OUTPUT_DIR/" 2>/dev/null || true
+    fi
+  done
+
+  for f in *; do
+    if [[ -f "$f" && -x "$f" && "$f" != *.sh ]]; then
+      cp "$f" "$OUTPUT_DIR/" 2>/dev/null || true
+    fi
+  done
 }
 
 build_cmake() {
